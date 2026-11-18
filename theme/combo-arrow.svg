@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 7x4 drop-down triangle, drawn at 4x. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="28" height="16" viewBox="736 470 7 4">
+	<path d="M736 470L743 470L739.5 474L736 470Z"/>
+</svg>

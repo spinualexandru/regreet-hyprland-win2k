@@ -1,0 +1,1470 @@
+diff --git a/src/config.rs b/src/config.rs
+index ee5528c..955dc66 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -11,19 +11,30 @@ use serde::Deserialize;
+ use serde::Deserializer;
+ 
+ use crate::constants::{GREETING_MSG, POWEROFF_CMD, REBOOT_CMD, X11_CMD_PREFIX};
+-use crate::gui::widget::clock::ClockConfig;
+ use crate::tomlutils::load_toml;
+ 
+ #[derive(Deserialize)]
++#[serde(default)]
+ pub struct AppearanceSettings {
+-    #[serde(default = "default_greeting_msg")]
+     pub greeting_msg: String,
++    /// Caption in the title bar of the login dialog
++    pub title: String,
++    /// Small line above the product name in the banner
++    pub banner_vendor: String,
++    /// Product name in the banner
++    pub banner_product: String,
++    /// Version shown next to the product name; detected from the installed Hyprland if unset
++    pub banner_version: Option<String>,
+ }
+ 
+ impl Default for AppearanceSettings {
+     fn default() -> Self {
+         AppearanceSettings {
+-            greeting_msg: default_greeting_msg(),
++            greeting_msg: GREETING_MSG.to_string(),
++            title: "Log On to Hyprland".to_string(),
++            banner_vendor: "Vaxry".to_string(),
++            banner_product: "Hyprland".to_string(),
++            banner_version: None,
+         }
+     }
+ }
+@@ -119,16 +130,9 @@ fn default_x11_command_prefix() -> Vec<String> {
+     shlex::split(X11_CMD_PREFIX).expect("Unable to lex X11 command prefix")
+ }
+ 
+-fn default_greeting_msg() -> String {
+-    GREETING_MSG.to_string()
+-}
+-
+ /// The configuration struct
+ #[derive(Default, Deserialize)]
+ pub struct Config {
+-    #[serde(default)]
+-    skip_selection: bool,
+-
+     #[serde(default)]
+     appearance: AppearanceSettings,
+ 
+@@ -143,15 +147,6 @@ pub struct Config {
+ 
+     #[serde(default)]
+     commands: SystemCommands,
+-
+-    #[serde(default)]
+-    pub(crate) widget: WidgetConfig,
+-}
+-
+-#[derive(Deserialize, Default)]
+-pub struct WidgetConfig {
+-    #[serde(default)]
+-    pub(crate) clock: ClockConfig,
+ }
+ 
+ impl Config {
+@@ -183,7 +178,7 @@ impl Config {
+         &self.appearance.greeting_msg
+     }
+ 
+-    pub fn skip_selection(&self) -> bool {
+-        self.skip_selection
++    pub fn get_appearance(&self) -> &AppearanceSettings {
++        &self.appearance
+     }
+ }
+diff --git a/src/constants.rs b/src/constants.rs
+index 87acf24..07b45e7 100644
+--- a/src/constants.rs
++++ b/src/constants.rs
+@@ -45,7 +45,7 @@ pub const REBOOT_CMD: &str = env_or!("REBOOT_CMD", "reboot");
+ pub const POWEROFF_CMD: &str = env_or!("POWEROFF_CMD", "poweroff");
+ 
+ /// Default greeting message
+-pub const GREETING_MSG: &str = "Welcome back!";
++pub const GREETING_MSG: &str = "Type your user name and password to log on.";
+ 
+ /// Directories separated by `:`, containing desktop files for X11/Wayland sessions
+ pub const SESSION_DIRS: &str = env_or!(
+diff --git a/src/gui/component.rs b/src/gui/component.rs
+index 708dcd9..8d3bee2 100644
+--- a/src/gui/component.rs
++++ b/src/gui/component.rs
+@@ -9,7 +9,7 @@ use std::path::PathBuf;
+ use relm4::{
+     AsyncComponentSender,
+     component::{AsyncComponent, AsyncComponentParts},
+-    gtk::{gdk::Texture, gio::File, glib::GString, prelude::*},
++    gtk::{gdk::Texture, gio::File, prelude::*},
+     prelude::*,
+ };
+ use tracing::{debug, info, warn};
+@@ -17,7 +17,7 @@ use tracing::{debug, info, warn};
+ use crate::config::BgFit;
+ 
+ use super::messages::{CommandMsg, InputMsg, UserSessInfo};
+-use super::model::{Greeter, InputMode, Updates};
++use super::model::{DEFAULT_INPUT_PROMPT, Greeter, InputMode, Updates};
+ use super::templates::Ui;
+ 
+ /// Load GTK settings from the greeter config.
+@@ -59,7 +59,7 @@ fn setup_settings(model: &Greeter, root: &gtk::ApplicationWindow) {
+     };
+ }
+ 
+-/// Populate the user and session combo boxes with entries.
++/// Fill in the user name and populate the session combo box with entries.
+ fn setup_users_sessions(model: &Greeter, widgets: &GreeterWidgets) {
+     // The user that is shown during initial login
+     let mut initial_username = None;
+@@ -67,15 +67,6 @@ fn setup_users_sessions(model: &Greeter, widgets: &GreeterWidgets) {
+     // the chosen user.
+     let mut initial_session = None;
+ 
+-    // Populate the usernames combo box.
+-    for (user, username) in model.sys_util.get_users().iter() {
+-        debug!("Found user: {user}");
+-        if initial_username.is_none() {
+-            initial_username = Some(username.clone());
+-        }
+-        widgets.ui.usernames_box.append(Some(username), user);
+-    }
+-
+     // Populate the sessions combo box.
+     for session in model.sys_util.get_sessions().keys() {
+         debug!("Found session: {session}");
+@@ -88,39 +79,51 @@ fn setup_users_sessions(model: &Greeter, widgets: &GreeterWidgets) {
+     // If the last user is known, show their login initially.
+     if let Some(last_user) = model.cache.get_last_user() {
+         initial_username = Some(last_user.to_string());
+-    } else if let Some(user) = &initial_username {
+-        info!("Using first found user '{user}' as initial user");
++    } else if let Some(username) = model.sys_util.get_users().values().next() {
++        info!("Using first found user '{username}' as initial user");
++        initial_username = Some(username.clone());
+     }
+ 
+-    // Set the user shown initially at login.
+-    if !widgets
+-        .ui
+-        .usernames_box
+-        .set_active_id(initial_username.as_deref())
+-    {
+-        if let Some(user) = &initial_username {
+-            warn!("Couldn't find user '{user}' to set as the initial user");
+-        }
++    // Set the user shown initially at login. This also fires `InputMsg::UserChanged`, which
++    // selects that user's last-used session.
++    if let Some(user) = &initial_username {
++        widgets.ui.username_entry.set_text(user);
+     }
+ 
+     // If there's no last-used session for the initial user, then the sessions box won't have
+-    // anything chosen, and thus remain empty. So detect this case (which should be
+-    // mutually-exclusive) with setting the initial user as above.
+-    if let Some(user) = &initial_username {
+-        if !model.cache.has_last_session(user)
+-            && initial_session.is_some()
+-            && !widgets
+-                .ui
+-                .sessions_box
+-                .set_active_id(initial_session.as_deref())
+-        {
+-            if let Some(sess) = &initial_session {
+-                warn!("Couldn't find session '{sess}' to set as the initial session");
+-            }
++    // anything chosen, and thus remain empty. So fall back to the first session found.
++    let has_last_session = initial_username
++        .as_deref()
++        .is_some_and(|user| model.cache.has_last_session(user));
++    if !has_last_session
++        && initial_session.is_some()
++        && !widgets
++            .ui
++            .sessions_box
++            .set_active_id(initial_session.as_deref())
++    {
++        if let Some(sess) = &initial_session {
++            warn!("Couldn't find session '{sess}' to set as the initial session");
+         }
+     }
+ }
+ 
++/// Drop the selection when a text field loses the keyboard focus, like a Win32 edit control.
++///
++/// GTK selects the whole text when a field is tabbed into, and would otherwise keep showing that
++/// selection after the focus has moved on.
++fn clear_selection_on_blur(entry: &gtk::Entry) {
++    let focus = gtk::EventControllerFocus::new();
++    focus.connect_leave({
++        let entry = entry.clone();
++        move |_| {
++            let position = entry.position();
++            entry.select_region(position, position);
++        }
++    });
++    entry.add_controller(focus);
++}
++
+ async fn load_image(path: &str) -> Result<Option<Texture>, glycin::ErrorCtx> {
+     let image = glycin::Loader::new(File::for_path(path)).load().await?;
+     let texture = image.next_frame().await?.texture();
+@@ -173,97 +176,66 @@ impl AsyncComponent for Greeter {
+                 background,
+ 
+                 #[template_child]
+-                clock_frame {
+-                    model.clock.widget(),
++                title_label {
++                    set_label: &model.config.get_appearance().title,
+                 },
+-
+                 #[template_child]
+-                message_label {
+-                    set_label: model.config.get_default_message(),
+-                },
++                help_button { connect_clicked => Self::Input::About },
+                 #[template_child]
+-                session_label {
+-                    #[track(model.updates.changed(Updates::input_mode()))]
+-                    set_visible: !model.updates.is_input(),
++                banner_vendor {
++                    set_label: &model.config.get_appearance().banner_vendor,
+                 },
+                 #[template_child]
+-                usernames_box {
+-                    #[track(
+-                        model.updates.changed(Updates::manual_user_mode())
+-                        || model.updates.changed(Updates::input_mode())
+-                    )]
+-                    set_sensitive: !model.updates.manual_user_mode && !model.updates.is_input(),
+-                    #[track(model.updates.changed(Updates::manual_user_mode()))]
+-                    set_visible: !model.updates.manual_user_mode,
+-                    connect_changed[
+-                        sender,
+-                        username_entry = ui.username_entry.clone(),
+-                        sessions_box = ui.sessions_box.clone(),
+-                        session_entry = ui.session_entry.clone(),
+-                    ] => move |this| sender.input(
+-                        Self::Input::UserChanged(
+-                            UserSessInfo::extract(this, &username_entry, &sessions_box, &session_entry)
+-                        )
+-                    ),
++                banner_product {
++                    set_label: &model.banner_markup(),
+                 },
+                 #[template_child]
+-                username_entry {
+-                    #[track(
+-                        model.updates.changed(Updates::manual_user_mode())
+-                        || model.updates.changed(Updates::input_mode())
+-                    )]
+-                    set_sensitive: model.updates.manual_user_mode && !model.updates.is_input(),
+-                    #[track(model.updates.changed(Updates::manual_user_mode()))]
+-                    set_visible: model.updates.manual_user_mode,
++                message_label {
++                    set_label: model.config.get_default_message(),
+                 },
+                 #[template_child]
+-                sessions_box {
+-                    #[track(
+-                        model.updates.changed(Updates::manual_sess_mode())
+-                        || model.updates.changed(Updates::input_mode())
+-                    )]
+-                    set_visible: !model.updates.manual_sess_mode && !model.updates.is_input(),
+-                    #[track(model.updates.changed(Updates::active_session_id()))]
+-                    set_active_id: model.updates.active_session_id.as_deref(),
++                username_entry {
++                    connect_changed[sender, sessions_box = ui.sessions_box.clone()] => move |this| {
++                        sender.input(Self::Input::UserChanged(
++                            UserSessInfo::extract(this, &sessions_box)
++                        ))
++                    },
++                    // Pressing Return after typing the user name moves on to the password.
++                    connect_activate[secret_entry = ui.secret_entry.clone()] => move |_| {
++                        secret_entry.grab_focus();
++                    },
+                 },
+                 #[template_child]
+-                session_entry {
++                input_label {
+                     #[track(
+-                        model.updates.changed(Updates::manual_sess_mode())
+-                        || model.updates.changed(Updates::input_mode())
++                        model.updates.changed(Updates::input_mode())
++                        || model.updates.changed(Updates::input_prompt())
+                     )]
+-                    set_visible: model.updates.manual_sess_mode && !model.updates.is_input(),
+-                },
+-                #[template_child]
+-                input_label {
+-                    #[track(model.updates.changed(Updates::input_mode()))]
+-                    set_visible: model.updates.is_input(),
+-                    #[track(model.updates.changed(Updates::input_prompt()))]
+-                    set_label: &model.updates.input_prompt,
++                    set_label: if model.updates.is_input() {
++                        &model.updates.input_prompt
++                    } else {
++                        DEFAULT_INPUT_PROMPT
++                    },
+                 },
+                 #[template_child]
+                 secret_entry {
+                     #[track(model.updates.changed(Updates::input_mode()))]
+-                    set_visible: model.updates.input_mode == InputMode::Secret,
++                    set_visible: model.updates.input_mode != InputMode::Visible,
++                    #[track(model.updates.changed(Updates::input()))]
++                    set_text: &model.updates.input,
+                     #[track(
+-                        model.updates.changed(Updates::input_mode())
+-                        && model.updates.input_mode == InputMode::Secret
++                        model.updates.changed(Updates::focus_input())
++                        && model.updates.input_mode != InputMode::Visible
+                     )]
+                     grab_focus: (),
+-                    #[track(model.updates.changed(Updates::input()))]
+-                    set_text: &model.updates.input,
+                     connect_activate[
+                         sender,
+-                        usernames_box = ui.usernames_box.clone(),
+                         username_entry = ui.username_entry.clone(),
+                         sessions_box = ui.sessions_box.clone(),
+-                        session_entry = ui.session_entry.clone(),
+                     ] => move |this| {
+                         sender.input(Self::Input::Login {
+                             input: this.text().to_string(),
+-                            info: UserSessInfo::extract(
+-                                &usernames_box, &username_entry, &sessions_box, &session_entry
+-                            ),
++                            info: UserSessInfo::extract(&username_entry, &sessions_box),
+                         })
+                     }
+                 },
+@@ -271,80 +243,71 @@ impl AsyncComponent for Greeter {
+                 visible_entry {
+                     #[track(model.updates.changed(Updates::input_mode()))]
+                     set_visible: model.updates.input_mode == InputMode::Visible,
++                    #[track(model.updates.changed(Updates::input()))]
++                    set_text: &model.updates.input,
+                     #[track(
+-                        model.updates.changed(Updates::input_mode())
++                        model.updates.changed(Updates::focus_input())
+                         && model.updates.input_mode == InputMode::Visible
+                     )]
+                     grab_focus: (),
+-                    #[track(model.updates.changed(Updates::input()))]
+-                    set_text: &model.updates.input,
+                     connect_activate[
+                         sender,
+-                        usernames_box = ui.usernames_box.clone(),
+                         username_entry = ui.username_entry.clone(),
+                         sessions_box = ui.sessions_box.clone(),
+-                        session_entry = ui.session_entry.clone(),
+                     ] => move |this| {
+                         sender.input(Self::Input::Login {
+                             input: this.text().to_string(),
+-                            info: UserSessInfo::extract(
+-                                &usernames_box, &username_entry, &sessions_box, &session_entry
+-                            ),
++                            info: UserSessInfo::extract(&username_entry, &sessions_box),
+                         })
+                     }
+                 },
+                 #[template_child]
+-                user_toggle {
+-                    #[track(model.updates.changed(Updates::input_mode()))]
+-                    set_sensitive: !model.updates.is_input(),
+-                    connect_clicked => Self::Input::ToggleManualUser,
+-                },
+-                #[template_child]
+-                sess_toggle {
+-                    #[track(model.updates.changed(Updates::input_mode()))]
+-                    set_visible: !model.updates.is_input(),
+-                    connect_clicked => Self::Input::ToggleManualSess,
++                session_label {
++                    #[track(model.updates.changed(Updates::options_expanded()))]
++                    set_visible: model.updates.options_expanded,
+                 },
+                 #[template_child]
+-                cancel_button {
+-                    #[track(model.updates.changed(Updates::input_mode()))]
+-                    set_visible: model.updates.is_input(),
+-                    connect_clicked => Self::Input::Cancel,
++                sessions_box {
++                    #[track(model.updates.changed(Updates::options_expanded()))]
++                    set_visible: model.updates.options_expanded,
++                    #[track(model.updates.changed(Updates::active_session_id()))]
++                    set_active_id: model.updates.active_session_id.as_deref(),
+                 },
+                 #[template_child]
+                 login_button {
+-                    #[track(
+-                        model.updates.changed(Updates::input_mode())
+-                        && !model.updates.is_input()
+-                    )]
+-                    grab_focus: (),
+                     connect_clicked[
+                         sender,
+                         secret_entry = ui.secret_entry.clone(),
+                         visible_entry = ui.visible_entry.clone(),
+-                        usernames_box = ui.usernames_box.clone(),
+                         username_entry = ui.username_entry.clone(),
+                         sessions_box = ui.sessions_box.clone(),
+-                        session_entry = ui.session_entry.clone(),
+                     ] => move |_| {
+                         sender.input(Self::Input::Login {
+-                            input: if secret_entry.is_visible() {
+-                                // This should correspond to `InputMode::Secret`.
+-                                secret_entry.text().to_string()
+-                            } else if EntryExt::is_visible(&visible_entry) {
++                            input: if EntryExt::is_visible(&visible_entry) {
+                                 // This should correspond to `InputMode::Visible`.
+                                 visible_entry.text().to_string()
+                             } else {
+-                                // This should correspond to `InputMode::None`.
+-                                String::new()
++                                // This should correspond to `InputMode::Secret`, or to the
++                                // password typed before greetd has asked for anything.
++                                secret_entry.text().to_string()
+                             },
+-                            info: UserSessInfo::extract(
+-                                &usernames_box, &username_entry, &sessions_box, &session_entry
+-                            ),
++                            info: UserSessInfo::extract(&username_entry, &sessions_box),
+                         })
+                     }
+                 },
+                 #[template_child]
++                cancel_button { connect_clicked => Self::Input::Cancel },
++                #[template_child]
++                options_button {
++                    #[track(model.updates.changed(Updates::options_expanded()))]
++                    set_label: if model.updates.options_expanded {
++                        "Options <<"
++                    } else {
++                        "Options >>"
++                    },
++                    connect_clicked => Self::Input::ToggleOptions,
++                },
++                #[template_child]
+                 notif_info {
+                     #[track(model.updates.changed(Updates::notif_msg()))]
+                     set_revealed: model.updates.notif_msg.is_some(),
+@@ -357,9 +320,19 @@ impl AsyncComponent for Greeter {
+                     set_label: model.updates.notif_msg.as_ref().unwrap_or(&"".to_string()),
+                 },
+                 #[template_child]
+-                reboot_button { connect_clicked => Self::Input::Reboot },
++                reboot_button {
++                    connect_clicked[sender, popover = ui.shutdown_popover.clone()] => move |_| {
++                        popover.popdown();
++                        sender.input(Self::Input::Reboot)
++                    },
++                },
+                 #[template_child]
+-                poweroff_button { connect_clicked => Self::Input::PowerOff },
++                poweroff_button {
++                    connect_clicked[sender, popover = ui.shutdown_popover.clone()] => move |_| {
++                        popover.popdown();
++                        sender.input(Self::Input::PowerOff)
++                    },
++                },
+             }
+         }
+     }
+@@ -431,32 +404,31 @@ impl AsyncComponent for Greeter {
+         };
+ 
+         // Set the default behaviour of pressing the Return key to act like the login button.
+-        root.set_default_widget(Some(&widgets.ui.login_button));
+-
+-        if let Some(user) = model.cache.get_last_user() {
+-            if model.config.skip_selection() && model.cache.has_last_session(user) {
+-                debug!("Skipping user & session selection and using those from the cache");
+-                // Queue up a login event after the Self::Input::UserChanged that will be fired by
+-                // setup_users_sessions (as sender.input queues). This way we avoid any race
+-                // conditions. Use cached values directly instead of extracting from widgets.
+-                let user = user.to_string();
+-                let last_session = model.cache.get_last_session(&user).unwrap().to_string();
+-                sender.input(Self::Input::Login {
+-                    input: String::new(),
+-                    info: UserSessInfo {
+-                        user_id: Some(user.into()),
+-                        user_text: GString::new(),
+-                        sess_id: Some(last_session.into()),
+-                        sess_text: GString::new(),
+-                    },
+-                });
+-            }
++        root.set_default_widget(Some(&*widgets.ui.login_button));
++
++        // The classic logon dialog masks passwords with asterisks instead of bullets.
++        if let Some(text) = widgets
++            .ui
++            .secret_entry
++            .delegate()
++            .and_then(|delegate| delegate.downcast::<gtk::Text>().ok())
++        {
++            text.set_invisible_char('*');
+         }
+ 
+         // Set window visible after all the setup is done.
+         root.set_visible(true);
+-        // Restore the intended initial focus.
+-        widgets.ui.login_button.grab_focus();
++        clear_selection_on_blur(&widgets.ui.username_entry);
++        clear_selection_on_blur(&widgets.ui.visible_entry);
++
++        // Start typing where something is missing: the password if the user name is known.
++        if widgets.ui.username_entry.text().is_empty() {
++            widgets.ui.username_entry.grab_focus();
++        } else {
++            widgets.ui.secret_entry.grab_focus();
++            // Showing the window put the focus on the user name first, which selected it.
++            widgets.ui.username_entry.set_position(-1);
++        }
+ 
+         AsyncComponentParts { model, widgets }
+     }
+@@ -480,14 +452,10 @@ impl AsyncComponent for Greeter {
+             Self::Input::Cancel => self.cancel_click_handler().await,
+             Self::Input::UserChanged(info) => {
+                 self.sess_info = Some(info);
+-                self.user_change_handler();
++                self.user_change_handler().await;
+             }
+-            Self::Input::ToggleManualUser => self
+-                .updates
+-                .set_manual_user_mode(!self.updates.manual_user_mode),
+-            Self::Input::ToggleManualSess => self
+-                .updates
+-                .set_manual_sess_mode(!self.updates.manual_sess_mode),
++            Self::Input::ToggleOptions => self.toggle_options_handler(),
++            Self::Input::About => self.about_click_handler(&sender),
+             Self::Input::Reboot => self.reboot_click_handler(&sender),
+             Self::Input::PowerOff => self.poweroff_click_handler(&sender),
+         }
+diff --git a/src/gui/messages.rs b/src/gui/messages.rs
+index ad1a756..ea6cbc5 100644
+--- a/src/gui/messages.rs
++++ b/src/gui/messages.rs
+@@ -11,29 +11,18 @@ use relm4::gtk::{ComboBoxText, Entry, glib::GString, prelude::*};
+ #[derive(Debug)]
+ /// Info about the current user and chosen session
+ pub struct UserSessInfo {
+-    /// The ID for the currently chosen user
+-    pub(super) user_id: Option<GString>,
+-    /// The entry text for the currently chosen user
++    /// The text typed into the user name field
+     pub(super) user_text: GString,
+     /// The ID for the currently chosen session
+     pub(super) sess_id: Option<GString>,
+-    /// The entry text for the currently chosen session
+-    pub(super) sess_text: GString,
+ }
+ 
+ impl UserSessInfo {
+     /// Extract session and user info from the relevant widgets.
+-    pub(super) fn extract(
+-        usernames_box: &ComboBoxText,
+-        username_entry: &Entry,
+-        sessions_box: &ComboBoxText,
+-        session_entry: &Entry,
+-    ) -> Self {
++    pub(super) fn extract(username_entry: &Entry, sessions_box: &ComboBoxText) -> Self {
+         Self {
+-            user_id: usernames_box.active_id(),
+             user_text: username_entry.text(),
+             sess_id: sessions_box.active_id(),
+-            sess_text: session_entry.text(),
+         }
+     }
+ }
+@@ -52,10 +41,10 @@ pub enum InputMsg {
+     Cancel,
+     /// The current user was changed in the GUI.
+     UserChanged(UserSessInfo),
+-    /// Toggle manual entry of user.
+-    ToggleManualUser,
+-    /// Toggle manual entry of session.
+-    ToggleManualSess,
++    /// Show/hide the session chooser.
++    ToggleOptions,
++    /// Show what this greeter is.
++    About,
+     Reboot,
+     PowerOff,
+ }
+diff --git a/src/gui/mod.rs b/src/gui/mod.rs
+index 9fb8c22..3f0ff18 100644
+--- a/src/gui/mod.rs
++++ b/src/gui/mod.rs
+@@ -8,9 +8,6 @@ mod component;
+ mod messages;
+ mod model;
+ mod templates;
+-pub(crate) mod widget {
+-    pub mod clock;
+-}
+ 
+ pub use component::GreeterInit;
+ pub use model::Greeter;
+diff --git a/src/gui/model.rs b/src/gui/model.rs
+index c43d412..07d11b3 100644
+--- a/src/gui/model.rs
++++ b/src/gui/model.rs
+@@ -11,11 +11,13 @@ use std::sync::Arc;
+ use std::time::Duration;
+ 
+ use greetd_ipc::{AuthMessageType, ErrorType, Response};
++use regex::Regex;
+ use relm4::{
+-    AsyncComponentSender, Component, Controller,
++    AsyncComponentSender,
+     gtk::{
+         MessageType,
+         gdk::{Display, Monitor},
++        glib::markup_escape_text,
+         prelude::*,
+     },
+ };
+@@ -26,13 +28,13 @@ use crate::client::{AuthStatus, GreetdClient};
+ use crate::config::Config;
+ use crate::sysutil::{SessionInfo, SessionType, SysUtil};
+ 
+-use super::{
+-    messages::{CommandMsg, UserSessInfo},
+-    widget::clock::Clock,
+-};
++use super::messages::{CommandMsg, UserSessInfo};
+ 
+ const NOTIF_CLEAR_DELAY: u64 = 5;
+ 
++/// Label of the password field while greetd isn't asking for anything specific
++pub(super) const DEFAULT_INPUT_PROMPT: &str = "Password:";
++
+ #[derive(PartialEq)]
+ pub(super) enum InputMode {
+     None,
+@@ -51,18 +53,16 @@ pub(super) struct Updates {
+     pub(super) notif_ver: u32,
+     /// Text in the password field
+     pub(super) input: String,
+-    /// Whether the username is being entered manually
+-    pub(super) manual_user_mode: bool,
+-    /// Whether the session is being entered manually
+-    pub(super) manual_sess_mode: bool,
++    /// Bumped whenever the keyboard focus should move to the password/prompt field
++    pub(super) focus_input: u32,
++    /// Whether the session chooser ("Options") is shown
++    pub(super) options_expanded: bool,
+     /// Input prompt sent by greetd for text input
+     pub(super) input_prompt: String,
+     /// Whether the user is currently entering a secret, something visible or nothing
+     pub(super) input_mode: InputMode,
+     /// ID of the active session
+     pub(super) active_session_id: Option<String>,
+-    /// Time that is displayed
+-    pub(super) time: String,
+     /// Monitor where the window is displayed
+     pub(super) monitor: Option<Monitor>,
+ }
+@@ -71,6 +71,33 @@ impl Updates {
+     pub(super) fn is_input(&self) -> bool {
+         self.input_mode != InputMode::None
+     }
++
++    /// Empty the password/prompt field.
++    fn clear_input(&mut self) {
++        // The model's copy is always empty while the field's text isn't, so a plain setter
++        // wouldn't register as a change. Force it.
++        self.update_input(String::clear);
++    }
++
++    /// Empty the password/prompt field and put the keyboard focus on it.
++    fn reset_input(&mut self) {
++        self.clear_input();
++        self.update_focus_input(|ver| *ver = ver.wrapping_add(1));
++    }
++}
++
++/// Find the "major.minor" version of the installed Hyprland, for the banner.
++fn detect_hyprland_version() -> Option<String> {
++    let output = Command::new("Hyprland").arg("--version").output().ok()?;
++    let text = String::from_utf8_lossy(&output.stdout);
++    let version = Regex::new(r"\b(\d+\.\d+)(?:\.\d+)*\b")
++        .ok()?
++        .captures(&text)
++        .map(|caps| caps[1].to_string());
++    if version.is_none() {
++        warn!("Couldn't find a version in the output of `Hyprland --version`");
++    }
++    version
+ }
+ 
+ /// Capitalize the first letter of the string.
+@@ -98,10 +125,10 @@ pub struct Greeter {
+     pub(super) updates: Updates,
+     /// Is it run as demo
+     pub(super) demo: bool,
+-    /// The clock widget
+-    pub(super) clock: Controller<Clock>,
+-    /// Has the first click of the login button been handled previously?
+-    first_login_handled: bool,
++    /// Version shown in the banner
++    banner_version: Option<String>,
++    /// Password typed before greetd asked for it; answers greetd's first secret prompt
++    pending_secret: Option<String>,
+ }
+ 
+ impl Greeter {
+@@ -113,13 +140,12 @@ impl Greeter {
+             notif_type: MessageType::Info,
+             notif_ver: 0,
+             input: String::new(),
+-            manual_user_mode: false,
+-            manual_sess_mode: false,
++            focus_input: 0,
++            options_expanded: true,
+             input_mode: InputMode::None,
+             input_prompt: String::new(),
+             active_session_id: None,
+             tracker: 0,
+-            time: "".to_string(),
+             monitor: None,
+         };
+         let greetd_client = Arc::new(Mutex::new(
+@@ -128,9 +154,9 @@ impl Greeter {
+                 .expect("Couldn't initialize greetd client"),
+         ));
+ 
+-        let clock = Clock::builder()
+-            .launch(config.widget.clock.clone())
+-            .detach();
++        let banner_version = (config.get_appearance().banner_version.clone())
++            .or_else(detect_hyprland_version)
++            .filter(|version| !version.is_empty());
+ 
+         Self {
+             greetd_client,
+@@ -142,11 +168,37 @@ impl Greeter {
+             config,
+             updates,
+             demo,
+-            clock,
+-            first_login_handled: false,
++            banner_version,
++            pending_secret: None,
+         }
+     }
+ 
++    /// Pango markup for the product line of the banner, e.g. "**Hyprland** 0.57".
++    pub(super) fn banner_markup(&self) -> String {
++        let product = markup_escape_text(&self.config.get_appearance().banner_product);
++        match &self.banner_version {
++            Some(version) => format!("<b>{product}</b> {}", markup_escape_text(version)),
++            None => format!("<b>{product}</b>"),
++        }
++    }
++
++    /// Event handler for clicking the "Options" button
++    ///
++    /// This shows/hides the session chooser.
++    pub(super) fn toggle_options_handler(&mut self) {
++        self.updates
++            .set_options_expanded(!self.updates.options_expanded);
++    }
++
++    /// Event handler for clicking the "?" button in the title bar
++    pub(super) fn about_click_handler(&mut self, sender: &AsyncComponentSender<Self>) {
++        let text = format!(
++            "ReGreet {} (classic logon layout)",
++            env!("CARGO_PKG_VERSION")
++        );
++        self.display_info(sender, &text, "Showing the about message");
++    }
++
+     /// Make the greeter full screen over the first monitor.
+     #[instrument(skip(self, sender))]
+     pub(super) fn choose_monitor(
+@@ -233,14 +285,21 @@ impl Greeter {
+ 
+     /// Event handler for clicking the "Cancel" button
+     ///
+-    /// This cancels the created session and goes back to the user/session chooser.
++    /// This cancels the created session and clears the password field.
+     #[instrument(skip_all)]
+     pub(super) async fn cancel_click_handler(&mut self) {
++        self.abort_login().await;
++        self.updates.reset_input();
++    }
++
++    /// Cancel the login attempt (if any), and go back to waiting for a password.
++    async fn abort_login(&mut self) {
+         if let Err(err) = self.greetd_client.lock().await.cancel_session().await {
+             warn!("Couldn't cancel greetd session: {err}");
+         };
+-        self.updates.set_input(String::new());
++        self.pending_secret = None;
+         self.updates.set_input_mode(InputMode::None);
++        self.updates.clear_input();
+     }
+ 
+     /// Create a greetd session, i.e. start a login attempt for the current user.
+@@ -248,26 +307,12 @@ impl Greeter {
+         let username = if let Some(username) = self.get_current_username() {
+             username
+         } else {
+-            // No username found (which shouldn't happen), so we can't create the session.
++            // Nothing typed into the user name field, so we can't create the session.
++            self.pending_secret = None;
++            self.display_error(sender, "Type your user name", "No username entered");
+             return;
+         };
+ 
+-        // Before trying to create a session, check if the session command (if manually entered) is
+-        // valid.
+-        if self.updates.manual_sess_mode {
+-            let info = self.sess_info.as_ref().expect("No session info set yet");
+-            if shlex::split(info.sess_text.as_str()).is_none() {
+-                // This must be an invalid command.
+-                self.display_error(
+-                    sender,
+-                    "Invalid session command",
+-                    &format!("Invalid session command: {}", info.sess_text),
+-                );
+-                return;
+-            };
+-            debug!("Manually entered session command is parsable");
+-        };
+-
+         info!("Creating session for user: {username}");
+ 
+         // Create a session for the current user.
+@@ -303,58 +348,43 @@ impl Greeter {
+     ) {
+         match response {
+             Response::Success => {
+-                if self.config.skip_selection() && !self.first_login_handled {
+-                    // This happens when the last logged-in user has no password or any other auth
+-                    // set. Since the login button is auto-clicked, it would've otherwise logged
+-                    // them in without any possibility of changing the user or session!
+-                    warn!("Preventing auto-login for user without auth: cancelling session");
+-                    self.cancel_click_handler().await
+-                } else {
+-                    // Authentication was successful and the session may be started.
+-                    // This may happen on the first request, in which case logging in
+-                    // as the given user requires no authentication.
+-                    info!("Successfully logged in; starting session");
+-                    self.start_session(sender).await
+-                }
++                // Authentication was successful and the session may be started.
++                // This may happen on the first request, in which case logging in
++                // as the given user requires no authentication.
++                info!("Successfully logged in; starting session");
++                self.pending_secret = None;
++                self.start_session(sender).await;
+                 return;
+             }
+             Response::AuthMessage {
+                 auth_message,
+                 auth_message_type,
+             } => {
+-                let auto_select_msg = if self.config.skip_selection() && !self.first_login_handled {
+-                    self.sess_info
+-                        .as_ref()
+-                        .and_then(|s| s.sess_id.as_ref())
+-                        .map(|s| format!("Auto-selecting session \"{s}\""))
+-                } else {
+-                    None
+-                };
+-
+                 match auth_message_type {
+                     AuthMessageType::Secret => {
+                         // Greetd has requested input that should be hidden
+                         // e.g.: a password
+                         info!("greetd asks for a secret auth input: {auth_message}");
++                        if let Some(secret) = self.pending_secret.take() {
++                            // The password was already typed next to the user name, so answer
++                            // the first secret prompt with it instead of asking again.
++                            debug!("Answering with the password that was typed up front");
++                            Box::pin(self.send_input(sender, secret)).await;
++                            return;
++                        }
+                         self.updates.set_input_mode(InputMode::Secret);
+-                        self.updates.set_input(String::new());
+                         self.updates
+                             .set_input_prompt(auth_message.trim_end().to_string());
+-                        if let Some(msg) = auto_select_msg {
+-                            self.display_info(sender, &msg, "Skipped user/session selection");
+-                        }
++                        self.updates.reset_input();
+                         return;
+                     }
+                     AuthMessageType::Visible => {
+                         // Greetd has requested input that need not be hidden
+                         info!("greetd asks for a visible auth input: {auth_message}");
+                         self.updates.set_input_mode(InputMode::Visible);
+-                        self.updates.set_input(String::new());
+                         self.updates
+                             .set_input_prompt(auth_message.trim_end().to_string());
+-                        if let Some(msg) = auto_select_msg {
+-                            self.display_info(sender, &msg, "Skipped user/session selection");
+-                        }
++                        self.updates.reset_input();
+                         return;
+                     }
+                     AuthMessageType::Info => {
+@@ -384,6 +414,7 @@ impl Greeter {
+                 error_type,
+             } => {
+                 // some general response error. This can be an authentication failure or a general error
++                self.pending_secret = None;
+                 self.display_error(
+                     sender,
+                     &format!("Login failed: {}", capitalize(&description)),
+@@ -412,15 +443,23 @@ impl Greeter {
+         });
+     }
+ 
+-    /// Event handler for selecting a different username in the `ComboBoxText`
++    /// Event handler for editing the user name
+     ///
+     /// This changes the session in the combo box according to the last used session of the current user.
+     #[instrument(skip_all)]
+-    pub(super) fn user_change_handler(&mut self) {
++    pub(super) async fn user_change_handler(&mut self) {
++        // A login attempt that's waiting for input belongs to the previous user name, so drop it.
++        let auth_status = self.greetd_client.lock().await.get_auth_status().clone();
++        if !matches!(auth_status, AuthStatus::NotStarted) {
++            info!("User name changed during a login attempt; cancelling it");
++            // Unlike the "Cancel" button, leave the focus where the user is typing.
++            self.abort_login().await;
++        }
++
+         let username = if let Some(username) = self.get_current_username() {
+             username
+         } else {
+-            // No username found (which shouldn't happen), so we can't change the session.
++            // The user name field is empty, so there's no session to look up.
+             return;
+         };
+ 
+@@ -429,8 +468,9 @@ impl Greeter {
+             self.updates
+                 .set_active_session_id(Some(last_session.to_string()));
+         } else {
+-            // Last session not found, so skip changing the session.
+-            info!("Last session for user '{username}' missing");
++            // Last session not found, so skip changing the session. This runs on every keystroke,
++            // so keep it out of the default log level.
++            debug!("Last session for user '{username}' missing");
+         };
+     }
+ 
+@@ -458,16 +498,18 @@ impl Greeter {
+                 self.send_input(sender, input).await;
+             }
+             AuthStatus::NotStarted => {
++                // Remember what's in the password field, to answer greetd's password prompt
++                // with it. If it's empty, wait for the prompt and let the user fill it in then.
++                self.pending_secret = Some(input).filter(|secret| !secret.is_empty());
+                 self.create_session(sender).await;
+             }
+         };
+-        self.first_login_handled = true;
+     }
+ 
+     /// Send the entered input for logging in.
+     async fn send_input(&mut self, sender: &AsyncComponentSender<Self>, input: String) {
+         // Reset the password field, for convenience when the user has to re-enter a password.
+-        self.updates.set_input(String::new());
++        self.updates.reset_input();
+ 
+         // Send the password, as authentication for the current user.
+         let resp = self
+@@ -484,19 +526,12 @@ impl Greeter {
+     /// Get the currently selected username.
+     fn get_current_username(&self) -> Option<String> {
+         let info = self.sess_info.as_ref().expect("No session info set yet");
+-        if self.updates.manual_user_mode {
+-            debug!(
+-                "Retrieved username '{}' through manual entry",
+-                info.user_text
+-            );
+-            Some(info.user_text.to_string())
+-        } else if let Some(username) = &info.user_id {
+-            // Get the currently selected user's ID, which should be their username.
+-            debug!("Retrieved username '{username}' from options");
+-            Some(username.to_string())
+-        } else {
+-            error!("No username entered");
++        let username = info.user_text.trim();
++        if username.is_empty() {
+             None
++        } else {
++            debug!("Retrieved username '{username}' from the user name field");
++            Some(username.to_string())
+         }
+     }
+ 
+@@ -506,29 +541,7 @@ impl Greeter {
+         sender: &AsyncComponentSender<Self>,
+     ) -> (Option<String>, Option<SessionInfo>) {
+         let info = self.sess_info.as_ref().expect("No session info set yet");
+-        if self.updates.manual_sess_mode {
+-            debug!(
+-                "Retrieved session command '{}' through manual entry",
+-                info.sess_text
+-            );
+-            if let Some(cmd) = shlex::split(info.sess_text.as_str()) {
+-                (
+-                    None,
+-                    Some(SessionInfo {
+-                        command: cmd,
+-                        sess_type: SessionType::Unknown,
+-                    }),
+-                )
+-            } else {
+-                // This must be an invalid command.
+-                self.display_error(
+-                    sender,
+-                    "Invalid session command",
+-                    &format!("Invalid session command: {}", info.sess_text),
+-                );
+-                (None, None)
+-            }
+-        } else if let Some(session) = &info.sess_id {
++        if let Some(session) = &info.sess_id {
+             // Get the currently selected session.
+             debug!("Retrieved current session: {session}");
+             if let Some(sess_info) = self.sys_util.get_sessions().get(session.as_str()) {
+@@ -664,7 +677,7 @@ impl Greeter {
+         display_text: &str,
+         log_text: &str,
+     ) {
+-        self.updates.set_notif_msg(Some(display_text.to_string()));
++        self.updates.set_notif_type(MessageType::Info);
+         info!("{log_text}");
+         self.display_notif(sender, display_text);
+     }
+diff --git a/src/gui/templates.rs b/src/gui/templates.rs
+index 997fcef..bd850e2 100644
+--- a/src/gui/templates.rs
++++ b/src/gui/templates.rs
+@@ -3,29 +3,48 @@
+ // SPDX-License-Identifier: GPL-3.0-or-later
+ 
+ //! Templates for various GUI components
++//!
++//! This is the "Log On to Windows"-style layout: a dialog with a title bar, a product banner, and
++//! the user name, password and session fields all visible at once. The looks themselves live in
++//! the CSS stylesheet; the widgets here only carry the structure and the CSS classes.
+ #![allow(dead_code)] // Silence dead code warnings for UI code that isn't dead
+ 
+ use gtk::prelude::*;
+-use relm4::{RelmWidgetExt, WidgetTemplate, gtk};
++use relm4::{WidgetTemplate, gtk};
+ 
+-/// Button that ends the greeter (eg. Reboot)
++/// Label for an entry/combo box
+ #[relm4::widget_template(pub)]
+-impl WidgetTemplate for EndButton {
++impl WidgetTemplate for EntryLabel {
++    view! {
++        gtk::Label {
++            set_xalign: 0.0,
++            add_css_class: "field-label",
++        }
++    }
++}
++
++/// Push button at the bottom of the dialog
++#[relm4::widget_template(pub)]
++impl WidgetTemplate for DialogButton {
+     view! {
+         gtk::Button {
+             set_focusable: true,
+-            add_css_class: "destructive-action",
++            add_css_class: "dialog-button",
+         }
+     }
+ }
+ 
+-/// Label for an entry/combo box
++/// Entry in the "Shut Down..." menu
+ #[relm4::widget_template(pub)]
+-impl WidgetTemplate for EntryLabel {
++impl WidgetTemplate for MenuItem {
+     view! {
+-        gtk::Label {
+-            set_width_request: 100,
+-            set_xalign: 1.0,
++        gtk::Button {
++            set_focusable: true,
++            add_css_class: "menu-item",
++
++            #[wrap(Some)]
++            #[name = "label"]
++            set_child = &gtk::Label { set_xalign: 0.0 },
+         }
+     }
+ }
+@@ -39,185 +58,211 @@ impl WidgetTemplate for Ui {
+             #[name = "background"]
+             gtk::Picture,
+ 
+-            /// Main login box
+-            add_overlay = &gtk::Frame {
++            /// Main login dialog
++            add_overlay = &gtk::Box {
++                set_orientation: gtk::Orientation::Vertical,
+                 set_halign: gtk::Align::Center,
+                 set_valign: gtk::Align::Center,
+-                add_css_class: "background",
++                add_css_class: "dialog",
+ 
+-                gtk::Grid {
+-                    set_column_spacing: 15,
+-                    set_margin_bottom: 15,
+-                    set_margin_end: 15,
+-                    set_margin_start: 15,
+-                    set_margin_top: 15,
+-                    set_row_spacing: 15,
+-                    set_width_request: 500,
++                gtk::Box {
++                    add_css_class: "titlebar",
+ 
+-                    /// Widget to display messages to the user
+-                    #[name = "message_label"]
+-                    attach[0, 0, 3, 1] = &gtk::Label {
+-                        set_margin_bottom: 15,
+-
+-                        // Format all messages in boldface.
+-                        #[wrap(Some)]
+-                        set_attributes = &gtk::pango::AttrList {
+-                            insert: {
+-                                let mut font_desc = gtk::pango::FontDescription::new();
+-                                font_desc.set_weight(gtk::pango::Weight::Bold);
+-                                gtk::pango::AttrFontDesc::new(&font_desc)
+-                            },
++                    gtk::Box {
++                        set_valign: gtk::Align::Center,
++                        add_css_class: "titlebar-icon",
++                    },
++
++                    /// Caption of the dialog
++                    #[name = "title_label"]
++                    gtk::Label {
++                        set_hexpand: true,
++                        set_xalign: 0.0,
++                        add_css_class: "titlebar-text",
++                    },
++
++                    /// The "?" caption button
++                    #[name = "help_button"]
++                    gtk::Button {
++                        set_label: "?",
++                        set_valign: gtk::Align::Center,
++                        set_focusable: false,
++                        set_tooltip_text: Some("About this greeter"),
++                        add_css_class: "titlebar-button",
++                    },
++                },
++
++                gtk::Box {
++                    add_css_class: "banner",
++
++                    gtk::Box {
++                        set_orientation: gtk::Orientation::Vertical,
++                        set_hexpand: true,
++                        add_css_class: "banner-text",
++
++                        /// Small line above the product name
++                        #[name = "banner_vendor"]
++                        gtk::Label {
++                            set_xalign: 0.0,
++                            add_css_class: "banner-vendor",
++                        },
++
++                        /// Product name and version
++                        #[name = "banner_product"]
++                        gtk::Label {
++                            set_xalign: 0.0,
++                            set_use_markup: true,
++                            add_css_class: "banner-product",
+                         },
+                     },
+ 
+-                    #[template]
+-                    attach[0, 1, 1, 1] = &EntryLabel {
+-                        set_label: "User:",
+-                        set_height_request: 45,
++                    gtk::Box {
++                        set_valign: gtk::Align::Center,
++                        add_css_class: "banner-logo",
+                     },
++                },
+ 
+-                    /// Label for the sessions widget
+-                    #[name = "session_label"]
+-                    #[template]
+-                    attach[0, 2, 1, 1] = &EntryLabel {
+-                        set_label: "Session:",
+-                        set_height_request: 45,
++                gtk::Box { add_css_class: "banner-rule" },
++
++                gtk::Grid {
++                    add_css_class: "dialog-body",
++
++                    /// Widget to display messages to the user
++                    #[name = "message_label"]
++                    attach[0, 0, 2, 1] = &gtk::Label {
++                        set_xalign: 0.0,
++                        set_wrap: true,
++                        add_css_class: "message",
+                     },
+ 
+-                    /// Widget containing the usernames
+-                    #[name = "usernames_box"]
+-                    attach[1, 1, 1, 1] = &gtk::ComboBoxText { set_hexpand: true },
++                    #[template]
++                    attach[0, 1, 1, 1] = &EntryLabel { set_label: "User name:" },
+ 
+                     /// Widget where the user enters the username
+                     #[name = "username_entry"]
+-                    attach[1, 1, 1, 1] = &gtk::Entry { set_hexpand: true },
+-
+-                    /// Widget containing the sessions
+-                    #[name = "sessions_box"]
+-                    attach[1, 2, 1, 1] = &gtk::ComboBoxText,
+-
+-                    /// Widget where the user enters the session
+-                    #[name = "session_entry"]
+-                    attach[1, 2, 1, 1] = &gtk::Entry,
++                    attach[1, 1, 1, 1] = &gtk::Entry {
++                        set_hexpand: true,
++                        set_input_purpose: gtk::InputPurpose::Name,
++                    },
+ 
+-                    /// Label for the password widget
++                    /// Label for the password widget; shows greetd's prompt while one is pending
+                     #[name = "input_label"]
+                     #[template]
+-                    attach[0, 2, 1, 1] = &EntryLabel {
+-                        set_height_request: 45,
+-                    },
++                    attach[0, 2, 1, 1] = &EntryLabel {},
+ 
+                     /// Widget where the user enters a secret
+                     #[name = "secret_entry"]
+-                    attach[1, 2, 1, 1] = &gtk::PasswordEntry { set_show_peek_icon: true },
++                    attach[1, 2, 1, 1] = &gtk::PasswordEntry { set_hexpand: true },
+ 
+                     /// Widget where the user enters something visible
+                     #[name = "visible_entry"]
+-                    attach[1, 2, 1, 1] = &gtk::Entry,
+-
+-                    /// Button to toggle manual user entry
+-                    #[name = "user_toggle"]
+-                    attach[2, 1, 1, 1] = &gtk::ToggleButton {
+-                        set_icon_name: "document-edit-symbolic",
+-                        set_tooltip_text: Some("Manually enter username"),
++                    attach[1, 2, 1, 1] = &gtk::Entry {
++                        set_hexpand: true,
++                        set_visible: false,
+                     },
+ 
+-                    /// Button to toggle manual session entry
+-                    #[name = "sess_toggle"]
+-                    attach[2, 2, 1, 1] = &gtk::ToggleButton {
+-                        set_icon_name: "document-edit-symbolic",
+-                        set_tooltip_text: Some("Manually enter session command"),
+-                    },
++                    /// Label for the sessions widget
++                    #[name = "session_label"]
++                    #[template]
++                    attach[0, 3, 1, 1] = &EntryLabel { set_label: "Log on to:" },
+ 
+-                    /// Collection of action buttons (eg. Login)
+-                    attach[1, 3, 2, 1] = &gtk::Box {
+-                        set_halign: gtk::Align::End,
+-                        set_spacing: 15,
++                    /// Widget containing the sessions
++                    #[name = "sessions_box"]
++                    attach[1, 3, 1, 1] = &gtk::ComboBoxText { set_hexpand: true },
+ 
+-                        /// Button to cancel password entry
+-                        #[name = "cancel_button"]
+-                        gtk::Button {
+-                            set_focusable: true,
+-                            set_label: "Cancel",
+-                        },
++                    attach[0, 4, 2, 1] = &gtk::Separator { add_css_class: "etched" },
++
++                    /// Collection of action buttons (eg. OK)
++                    attach[0, 5, 2, 1] = &gtk::Box {
++                        add_css_class: "button-row",
+ 
+                         /// Button to enter the password and login
+                         #[name = "login_button"]
+-                        gtk::Button {
+-                            set_focusable: true,
+-                            set_label: "Login",
++                        #[template]
++                        DialogButton {
++                            set_label: "OK",
+                             set_receives_default: true,
+-                            add_css_class: "suggested-action",
++                            add_css_class: "default-button",
+                         },
+-                    },
+-                },
+-            },
+-
+-            /// Clock widget
+-            #[name = "clock_frame"]
+-            add_overlay = &gtk::Frame {
+-                set_halign: gtk::Align::Center,
+-                set_valign: gtk::Align::Start,
+ 
+-                add_css_class: "background",
++                        /// Button to cancel the login attempt and clear the password
++                        #[name = "cancel_button"]
++                        #[template]
++                        DialogButton { set_label: "Cancel" },
++
++                        /// Button that opens the menu with the commands that end the greeter
++                        #[name = "shutdown_button"]
++                        gtk::MenuButton {
++                            set_direction: gtk::ArrowType::Up,
++                            add_css_class: "dialog-button",
++                            add_css_class: "wide",
++
++                            // A plain label as the child, since `set_label` would add an arrow.
++                            #[wrap(Some)]
++                            set_child = &gtk::Label { set_label: "Shut Down..." },
++
++                            #[wrap(Some)]
++                            #[name = "shutdown_popover"]
++                            set_popover = &gtk::Popover {
++                                set_has_arrow: false,
++                                set_halign: gtk::Align::Start,
++                                add_css_class: "classic-menu",
++
++                                gtk::Box {
++                                    set_orientation: gtk::Orientation::Vertical,
++
++                                    /// Button to power-off
++                                    #[name = "poweroff_button"]
++                                    #[template]
++                                    MenuItem {
++                                        #[template_child]
++                                        label { set_label: "Shut down" },
++                                    },
++
++                                    /// Button to reboot
++                                    #[name = "reboot_button"]
++                                    #[template]
++                                    MenuItem {
++                                        #[template_child]
++                                        label { set_label: "Restart" },
++                                    },
++                                },
++                            },
++                        },
+ 
+-                // Make it fit cleanly onto the top edge of the screen.
+-                inline_css: "
+-                    border-top-right-radius: 0px;
+-                    border-top-left-radius: 0px;
+-                    border-top-width: 0px;
+-                ",
++                        /// Button to show/hide the session chooser
++                        #[name = "options_button"]
++                        #[template]
++                        DialogButton {
++                            set_hexpand: true,
++                            set_halign: gtk::Align::End,
++                            add_css_class: "wide",
++                        },
++                    },
++                },
+             },
+ 
+-            /// Collection of widgets appearing at the bottom
++            /// Notification area at the bottom of the screen
+             add_overlay = &gtk::Box {
+-                set_orientation: gtk::Orientation::Vertical,
+                 set_halign: gtk::Align::Center,
+                 set_valign: gtk::Align::End,
+-                set_margin_bottom: 15,
+-                set_spacing: 15,
+-
+-                gtk::Frame {
+-                    inline_css: "
+-                        border: none;
+-                    ",
+-
+-                    /// Notification bar for messages
+-                    #[name = "notif_info"]
+-                    gtk::InfoBar {
+-                        // During init, the info bar closing animation is shown. To hide that, make
+-                        // it invisible. Later, the code will permanently make it visible, so that
+-                        // `InfoBar::set_revealed` will work properly with animations.
+-                        set_visible: false,
+-                        set_message_type: gtk::MessageType::Info,
+-
+-                        /// The actual notification message
+-                        #[name = "notif_label"]
+-                        gtk::Label {
+-                            set_halign: gtk::Align::Center,
+-                            set_margin_top: 10,
+-                            set_margin_bottom: 10,
+-                            set_margin_start: 10,
+-                            set_margin_end: 10,
+-                        },
+-                    }
+-                },
+-
+-                /// Collection of buttons that close the greeter (eg. Reboot)
+-                gtk::Box {
+-                    set_halign: gtk::Align::Center,
+-                    set_homogeneous: true,
+-                    set_spacing: 15,
+-
+-                    /// Button to reboot
+-                    #[name = "reboot_button"]
+-                    #[template]
+-                    EndButton { set_label: "Reboot" },
+-
+-                    /// Button to power-off
+-                    #[name = "poweroff_button"]
+-                    #[template]
+-                    EndButton { set_label: "Power Off" },
++                add_css_class: "notification-area",
++
++                /// Notification bar for messages
++                #[name = "notif_info"]
++                gtk::InfoBar {
++                    // During init, the info bar closing animation is shown. To hide that, make
++                    // it invisible. Later, the code will permanently make it visible, so that
++                    // `InfoBar::set_revealed` will work properly with animations.
++                    set_visible: false,
++                    set_message_type: gtk::MessageType::Info,
++
++                    /// The actual notification message
++                    #[name = "notif_label"]
++                    gtk::Label {
++                        set_halign: gtk::Align::Center,
++                        add_css_class: "notification-text",
++                    },
+                 },
+             },
+         }

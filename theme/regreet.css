@@ -1,0 +1,309 @@
+@define-color desktop      #3A6EA5;
+@define-color face         #D4D0C8;  /* 3D object face */
+@define-color highlight    #FFFFFF;  /* outer top-left of a raised edge */
+@define-color shadow       #808080;  /* inner bottom-right of a raised edge */
+@define-color dark_shadow  #404040;  /* outer bottom-right of a raised edge */
+@define-color title_start  #0A246A;
+@define-color title_end    #A6CAF0;
+@define-color tooltip      #FFFFE1;
+
+* {
+    font-family: "Noto Sans", sans-serif;
+    font-size: 12px;
+    color: #000000;
+    -gtk-icon-size: 12px;
+}
+
+window {
+    background-color: @desktop;
+}
+
+/* ---- 3D edges ---------------------------------------------------------------------------- */
+
+/* Raised: the dialog frame and everything that can be pushed. */
+.dialog,
+.titlebar-button,
+combobox button.combo arrow,
+button.dialog-button,
+menubutton.dialog-button > button {
+    background-color: @face;
+    box-shadow:
+        inset -2px -2px @shadow,
+        inset  2px  2px @face,
+        inset -1px -1px @dark_shadow,
+        inset  1px  1px @highlight;
+}
+
+/* Sunken: fields that hold text. */
+entry,
+combobox button.combo {
+    background-color: #FFFFFF;
+    box-shadow:
+        inset -2px -2px @face,
+        inset  2px  2px @dark_shadow,
+        inset -1px -1px @highlight,
+        inset  1px  1px @shadow;
+}
+
+/* ---- The dialog ------------------------------------------------------------------------- */
+
+.dialog {
+    min-width: 522px;
+    padding: 3px;
+}
+
+.titlebar {
+    min-height: 24px;
+    padding: 0 4px 0 5px;
+    background-image: linear-gradient(to right, @title_start, @title_end);
+}
+
+.titlebar-icon {
+    min-width: 15px;
+    min-height: 15px;
+    margin: 0 7px 1px 0;
+    background: url("titlebar-icon.svg") center / 15px 15px no-repeat;
+}
+
+.titlebar-text {
+    margin-top: 1px;
+    font-weight: 600;
+    color: #FFFFFF;
+}
+
+.titlebar-button {
+    min-width: 18px;
+    min-height: 15px;
+    padding: 1px 0 0 0;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.titlebar-button:active {
+    padding: 2px 0 0 1px;
+    box-shadow:
+        inset -2px -2px @face,
+        inset  2px  2px @shadow,
+        inset -1px -1px @highlight,
+        inset  1px  1px @dark_shadow;
+}
+
+.banner {
+    min-height: 97px;
+    margin: 3px 1px 0 1px;
+    background-color: #FFFFFF;
+}
+
+.banner-text {
+    margin: 13px 0 0 20px;
+}
+
+.banner-vendor,
+.banner-product {
+    font-family: "Arimo", "Liberation Sans", "Arial", sans-serif;
+    color: #171717;
+}
+
+.banner-vendor {
+    font-size: 13px;
+    margin-left: 2px;
+}
+
+.banner-product {
+    font-size: 37px;
+    margin-top: 2px;
+}
+
+.banner-logo {
+    min-width: 68px;
+    min-height: 86px;
+    margin: 0 42px 5px 0;
+    background: url("hyprland-logo.svg") center / 68px 86px no-repeat;
+}
+
+.banner-rule {
+    min-height: 5px;
+    margin: 0 1px;
+    border-top: 2px solid @title_start;
+    background-image: linear-gradient(to right, @title_start, #477BB6 65%, @title_end);
+}
+
+.dialog-body {
+    padding: 19px 21px 16px 21px;
+}
+
+.message {
+    margin-bottom: 2px;
+}
+
+.field-label {
+    min-width: 98px;
+    padding-right: 4px;
+    margin-top: 13px;
+}
+
+/* ---- Text fields ------------------------------------------------------------------------ */
+
+entry {
+    min-height: 25px;
+    margin-top: 13px;
+    padding: 0 7px;
+    caret-color: #000000;
+}
+
+entry > text > selection {
+    background-color: @title_start;
+    color: #FFFFFF;
+}
+
+entry > image {
+    margin-left: 6px;
+    color: @shadow;
+}
+
+/* ---- Drop-down list --------------------------------------------------------------------- */
+
+combobox {
+    margin-top: 13px;
+}
+
+combobox button.combo {
+    min-height: 21px;
+    padding: 2px 2px 2px 5px;
+}
+
+combobox button.combo arrow {
+    min-width: 20px;
+    min-height: 21px;
+    -gtk-icon-source: none;
+    background-image: url("combo-arrow.svg");
+    background-position: center;
+    background-size: 7px 4px;
+    background-repeat: no-repeat;
+}
+
+combobox button.combo:checked arrow {
+    background-position: calc(50% + 1px) calc(50% + 1px);
+    box-shadow: inset 0 0 0 1px @shadow;
+}
+
+/* ---- Menus ------------------------------------------------ */
+
+popover > arrow {
+    background: none;
+}
+
+popover > contents {
+    padding: 1px;
+    background-color: #FFFFFF;
+    border: 1px solid #000000;
+}
+
+popover.classic-menu > contents {
+    padding: 3px;
+    border: none;
+    background-color: @face;
+    box-shadow:
+        inset -2px -2px @shadow,
+        inset  2px  2px @highlight,
+        inset -1px -1px @dark_shadow,
+        inset  1px  1px @face;
+}
+
+popover modelbutton,
+.menu-item {
+    min-height: 18px;
+    padding: 0 7px;
+}
+
+.menu-item {
+    min-width: 96px;
+    padding: 0 18px;
+}
+
+popover modelbutton:hover,
+popover modelbutton:selected,
+popover modelbutton:focus,
+.menu-item:hover,
+.menu-item:focus {
+    background-color: @title_start;
+}
+
+popover modelbutton:hover *,
+popover modelbutton:selected *,
+popover modelbutton:focus *,
+.menu-item:hover *,
+.menu-item:focus * {
+    color: #FFFFFF;
+}
+
+/* ---- Push buttons ------------------------------------------------------------------------ */
+
+separator.etched {
+    min-height: 0;
+    margin-top: 18px;
+    border-top: 1px solid @shadow;
+    border-bottom: 1px solid @highlight;
+}
+
+.button-row {
+    margin-top: 20px;
+    border-spacing: 8px;
+}
+
+button.dialog-button,
+menubutton.dialog-button > button {
+    min-width: 80px;
+    min-height: 26px;
+    padding: 0;
+    outline: 1px dotted transparent;
+    outline-offset: -5px;
+}
+
+button.dialog-button.wide,
+menubutton.dialog-button.wide > button {
+    min-width: 112px;
+}
+
+button.dialog-button.default-button {
+    box-shadow:
+        inset -3px -3px @shadow,
+        inset  3px  3px @face,
+        inset -2px -2px @dark_shadow,
+        inset  2px  2px @highlight,
+        inset 0 0 0 1px #000000;
+}
+
+button.dialog-button:focus-visible,
+menubutton.dialog-button > button:focus-visible {
+    outline-color: #000000;
+}
+
+button.dialog-button:active,
+menubutton.dialog-button > button:active,
+menubutton.dialog-button > button:checked {
+    padding: 1px 0 0 1px;
+    box-shadow:
+        inset 0 0 0 2px @shadow,
+        inset 0 0 0 1px #000000;
+}
+
+.notification-area {
+    margin-bottom: 48px;
+}
+
+infobar > revealer > box {
+    padding: 5px 12px;
+    background-color: @tooltip;
+    border: 1px solid #000000;
+}
+
+infobar.error .notification-text {
+    font-weight: 600;
+}
+
+tooltip {
+    padding: 2px 4px;
+    background-color: @tooltip;
+    border: 1px solid #000000;
+}

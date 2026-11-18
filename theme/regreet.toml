@@ -1,0 +1,23 @@
+[GTK]
+application_prefer_dark_theme = false
+cursor_theme_name             = "Adwaita"
+cursor_blink                  = true
+font_name                     = "Noto Sans 9"
+icon_theme_name               = "Adwaita"
+# GTK's built-in blank theme
+theme_name                    = "Empty"
+
+[commands]
+reboot     = ["systemctl", "reboot"]
+poweroff   = ["systemctl", "poweroff"]
+x11_prefix = ["startx", "/usr/bin/env"]
+
+[appearance]
+# These are the built-in texts; uncomment a line to change it.
+# greeting_msg   = "Type your user name and password to log on."
+# title          = "Log On to Hyprland"
+# banner_vendor  = "Vaxry"
+# banner_product = "Hyprland"
+# The version next to the product name follows the installed Hyprland ("0.57" for 0.57.x).
+# Uncomment to pin it, or set it to "" to hide it.
+# banner_version = "0.57"
